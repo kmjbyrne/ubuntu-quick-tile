@@ -1,0 +1,228 @@
+#!/usr/bin/env python3
+#
+# tile-all - snap every window on a monitor into the active Tiling Shell layout.
+#
+# Reads the currently-selected Tiling Shell layout, then moves and resizes every
+# normal window on the current workspace into that layout's zones. Multi-monitor
+# aware: tiling is confined to a single monitor's rectangle and only windows
+# whose centre is on that monitor are touched, so nothing bleeds onto a second
+# screen.
+#
+# Usage:
+#   tile-all              tile the primary monitor
+#   tile-all HDMI-1       tile a specific monitor by connector name
+#
+# X11 only. Requires: wmctrl, xdotool, gsettings, xrandr, and the Tiling Shell
+# GNOME extension.
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+
+EXT = "tilingshell@ferrarodomenico.com"
+SCHEMA = "org.gnome.shell.extensions.tilingshell"
+SCHEMADIR = os.path.expanduser(
+    f"~/.local/share/gnome-shell/extensions/{EXT}/schemas"
+)
+
+
+def die(msg):
+    print(f"tile-all: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def run(cmd):
+    return subprocess.check_output(cmd, text=True)
+
+
+def check_environment():
+    for tool in ("wmctrl", "xdotool", "gsettings", "xrandr"):
+        if shutil.which(tool) is None:
+            die(f"missing dependency: {tool}")
+
+    if not os.path.isdir(SCHEMADIR):
+        die(
+            f"Tiling Shell schema not found at {SCHEMADIR}; "
+            "is the Tiling Shell extension installed?"
+        )
+
+
+def gsettings_get(key):
+    return run(["gsettings", "--schemadir", SCHEMADIR, "get", SCHEMA, key]).strip()
+
+
+def active_layout_tiles(monitor_index):
+    # selected-layouts is positional, one entry per monitor in GNOME's monitor
+    # order: [[id, ...], [id, ...], ...]. We must read the entry for the monitor
+    # being tiled, not blindly monitor 0, or a screen with a different active
+    # layout gets tiled with the wrong zones. The inner list is per-workspace;
+    # the first element is the current layout for that monitor.
+    selected = json.loads(gsettings_get("selected-layouts").replace("'", '"'))
+
+    if monitor_index >= len(selected):
+        die(
+            f"monitor index {monitor_index} has no entry in selected-layouts "
+            f"(only {len(selected)} present); layouts may not be committed yet"
+        )
+    active_id = selected[monitor_index][0]
+
+    layouts = json.loads(gsettings_get("layouts-json").strip("'"))
+    layout = next(l for l in layouts if l["id"] == active_id)
+
+    # Each tile is a fractional rectangle in the range 0..1.
+    return [(t["x"], t["y"], t["width"], t["height"]) for t in layout["tiles"]]
+
+
+def parse_monitors():
+    # xrandr --listmonitors lines look like:
+    #   " 0: +*HDMI-0 5120/1190x1440/340+0+0  HDMI-0"
+    # The geometry is always the second-to-last whitespace token, in the form
+    # W/mmW x H/mmH + X + Y. We parse only that token, not the whole line.
+    monitors = []
+    for line in run(["xrandr", "--listmonitors"]).splitlines()[1:]:
+        fields = line.split()
+        if len(fields) < 4:
+            continue
+
+        # fields[1] is the connector, prefixed with flags like '+*' when primary.
+        primary = "*" in fields[1]
+        name = fields[-1]
+        geometry = fields[-2]
+
+        try:
+            wpart, rest = geometry.split("x", 1)
+            width = int(wpart.split("/", 1)[0])
+            hpart, offsets = rest.split("+", 1)
+            height = int(hpart.split("/", 1)[0])
+            x_str, y_str = offsets.split("+", 1)
+            x, y = int(x_str), int(y_str)
+        except (ValueError, IndexError):
+            die(f"could not parse monitor geometry: {geometry!r}")
+
+        monitors.append(
+            {"name": name, "primary": primary, "x": x, "y": y, "w": width, "h": height}
+        )
+
+    if not monitors:
+        die("no monitors reported by xrandr")
+    return monitors
+
+
+def select_monitor(monitors, target):
+    # Returns (index, monitor). The index is the position in xrandr order, which
+    # we also use to look up the matching per-monitor layout.
+    if target:
+        for i, m in enumerate(monitors):
+            if m["name"] == target:
+                return i, m
+        names = ", ".join(m["name"] for m in monitors)
+        die(f"no monitor named {target!r}; available: {names}")
+
+    for i, m in enumerate(monitors):
+        if m["primary"]:
+            return i, m
+    return 0, monitors[0]
+
+
+def panel_offset():
+    # The top panel height is the work-area Y offset wmctrl reports for the
+    # active workspace ('*'); tiles should start below it.
+    for line in run(["wmctrl", "-d"]).splitlines():
+        if "*" not in line:
+            continue
+        fields = line.replace(",", " ").split()
+        if "WA:" in fields:
+            return int(fields[fields.index("WA:") + 2])
+    return 0
+
+
+def active_workspace():
+    for line in run(["wmctrl", "-d"]).splitlines():
+        if "*" in line:
+            return line.split()[0]
+    die("could not determine active workspace")
+
+
+def centre_in(monitor, cx, cy):
+    return (
+        monitor["x"] <= cx < monitor["x"] + monitor["w"]
+        and monitor["y"] <= cy < monitor["y"] + monitor["h"]
+    )
+
+
+def windows_on(monitor, monitors, workspace):
+    # Tile normal windows on the active workspace that belong to the target
+    # monitor. A window belongs if its centre is inside the target monitor, or
+    # if its centre is off every monitor (stranded off-screen) -- those get
+    # adopted onto the target so they are rescued rather than skipped. Windows
+    # whose centre sits on a *different* monitor are left alone, so other
+    # screens are never disturbed.
+    wins = []
+    for line in run(["wmctrl", "-lG"]).splitlines():
+        fields = line.split(None, 7)
+        if len(fields) < 7 or fields[1] != workspace:
+            continue
+
+        wid = fields[0]
+        x, y, w, h = (int(fields[i]) for i in (2, 3, 4, 5))
+        cx, cy = x + w / 2, y + h / 2
+
+        if centre_in(monitor, cx, cy):
+            wins.append(wid)
+            continue
+
+        on_another = any(centre_in(m, cx, cy) for m in monitors)
+        if not on_another:
+            wins.append(wid)
+    return wins
+
+
+def place(wid, x, y, w, h):
+    # Maximized windows ignore move/resize, so clear that state first.
+    subprocess.run(
+        ["wmctrl", "-i", "-r", wid, "-b", "remove,maximized_vert,maximized_horz"],
+        check=True,
+    )
+    subprocess.run(["xdotool", "windowmove", wid, str(x), str(y)], check=True)
+    subprocess.run(["xdotool", "windowsize", wid, str(w), str(h)], check=True)
+
+
+def main():
+    check_environment()
+
+    target = sys.argv[1] if len(sys.argv) > 1 else ""
+    monitors = parse_monitors()
+    monitor_index, monitor = select_monitor(monitors, target)
+
+    # Reclaim the panel strip from the monitor that owns the top of the screen.
+    panel = panel_offset()
+    if monitor["y"] < panel:
+        delta = panel - monitor["y"]
+        monitor["y"] = panel
+        monitor["h"] -= delta
+
+    tiles = active_layout_tiles(monitor_index)
+    workspace = active_workspace()
+    wins = windows_on(monitor, monitors, workspace)
+
+    if not wins:
+        print("No windows on the target monitor.")
+        return
+
+    for i, wid in enumerate(wins):
+        # Wrap around when there are more windows than zones.
+        fx, fy, fw, fh = tiles[i % len(tiles)]
+        x = int(monitor["x"] + fx * monitor["w"])
+        y = int(monitor["y"] + fy * monitor["h"])
+        w = int(fw * monitor["w"])
+        h = int(fh * monitor["h"])
+        place(wid, x, y, w, h)
+
+    label = target or "primary"
+    print(f"Tiled {len(wins)} window(s) into {len(tiles)} zone(s) on monitor {label}.")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+#
+# install - put tile-all on PATH and bind it to Super+T.
+#
+# Copies the tile-all script into ~/.local/bin and registers a GNOME custom
+# keyboard shortcut (Super+T) that runs it. Safe to re-run; it overwrites the
+# previous copy and re-points the shortcut.
+
+set -euo pipefail
+
+SRC="$(cd "$(dirname "$0")" && pwd)/tile-all"
+DEST="$HOME/.local/bin/tile-all"
+HOTKEY='<Super>t'
+
+command -v wmctrl  >/dev/null || echo "warning: wmctrl not installed (sudo apt install wmctrl)"
+command -v xdotool >/dev/null || echo "warning: xdotool not installed (sudo apt install xdotool)"
+
+mkdir -p "$HOME/.local/bin"
+install -m 0755 "$SRC" "$DEST"
+echo "installed: $DEST"
+
+BASE=org.gnome.settings-daemon.plugins.media-keys
+KEY=/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/tile-all/
+EXIST=$(gsettings get $BASE custom-keybindings)
+
+if [[ "$EXIST" != *"$KEY"* ]]; then
+  if [[ "$EXIST" == "@as []" || "$EXIST" == "[]" ]]; then
+    gsettings set $BASE custom-keybindings "['$KEY']"
+  else
+    gsettings set $BASE custom-keybindings "${EXIST%]*}, '$KEY']"
+  fi
+fi
+
+P="$BASE.custom-keybinding:$KEY"
+gsettings set "$P" name 'Tile all windows'
+gsettings set "$P" command "$DEST"
+gsettings set "$P" binding "$HOTKEY"
+
+echo "bound: $HOTKEY -> tile-all"
+echo "Done. Press Super+T to tile, or run 'tile-all' from a terminal."
