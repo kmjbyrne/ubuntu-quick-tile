@@ -40,8 +40,8 @@ sudo apt install wmctrl xdotool
 This copies `tile-all` to `~/.local/bin/`, makes it executable, and binds
 `Super+T` to it. Re-running is safe.
 
-`~/.local/bin` has to be on your `PATH` for the bare `tile-all` command (it
-is usually on Ubuntu). If you get "command not found", use the full path or the
+`~/.local/bin` has to be on your `PATH` for the bare `tile-all` command (it is
+usually on Ubuntu). If you get "command not found", use the full path or the
 `Super+T` hotkey, which ignores `PATH`.
 
 ## Usage
@@ -75,8 +75,11 @@ for i in $(seq 5); do tilix & done; sleep 1; tile-all
 
 Each `tilix` opens its own window, then `tile-all` arranges them. Switch to a
 five-zone layout first so each gets a zone. The `sleep 1` is there because
-spawning and tiling are async — without it `tile-all` runs before the windows
+spawning and tiling are async, so without it `tile-all` runs before the windows
 exist and finds nothing.
+
+`tilix` is just the example here. `tile-all` reorders windows by position, so it
+works the same with GNOME Terminal or any other app. Swap in whatever you use.
 
 ## Limitations
 
@@ -89,7 +92,7 @@ menu at login if needed.
 
 ### More Windows Than Zones Overlap
 
-Eight windows into five zones wraps around — windows six through eight stack
+Eight windows into five zones wraps around, so windows six through eight stack
 onto the first three. Use a layout with more tiles for one window per zone.
 
 ### Active Layout Only
