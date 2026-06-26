@@ -1,4 +1,4 @@
-# ubuntu-quick-tile
+# Ubuntu Quick Tile
 
 A one-shot bulk tiler for the
 [Tiling Shell](https://extensions.gnome.org/extension/7065/tiling-shell/) GNOME
@@ -20,6 +20,8 @@ gnome-extensions list --enabled | grep tilingshell
 ```
 
 If that prints nothing, install and enable it first.
+
+See [Compatibility](#appendix) section in the Appendix for verified versions.
 
 ## How It Works
 
@@ -74,9 +76,9 @@ for i in $(seq 5); do tilix & done; sleep 1; tile-all
 ```
 
 Each `tilix` opens its own window, then `tile-all` arranges them. Switch to a
-five-zone layout first so each gets a zone. The `sleep 1` is there because
-spawning and tiling are async, so without it `tile-all` runs before the windows
-exist and finds nothing.
+five-zone layout first, so each gets a zone. The `sleep 1` is there because
+spawning and tiling are asynchronous, so without it `tile-all` runs before the
+windows exist and finds nothing.
 
 `tilix` is just the example here. `tile-all` reorders windows by position, so it
 works the same with GNOME Terminal or any other app. Swap in whatever you use.
@@ -99,3 +101,21 @@ onto the first three. Use a layout with more tiles for one window per zone.
 
 No per-zone targeting and no tiling into a layout you're not on. Select the
 layout, then tile.
+
+## Appendix
+
+### Compatibility
+
+The versions below are verified, meaning `tile-all` has been run and confirmed
+working against them. Other versions are likely fine but untested.
+
+| Dependency   | Verified version |
+| ------------ | ---------------- |
+| Ubuntu       | 24.04.3 LTS      |
+| GNOME Shell  | 46.0             |
+| Tiling Shell | 17.3             |
+| `wmctrl`     | 1.07             |
+| `xdotool`    | 3.20160805.1     |
+| `xrandr`     | 1.5.2            |
+| Python       | 3.12.3           |
+| Session type | X11              |
